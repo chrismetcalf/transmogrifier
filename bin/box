@@ -1,0 +1,304 @@
+#!/usr/bin/env ruby
+#
+# Uses dataset mappings to convert data into open standards
+#
+
+require 'thor'
+require 'yaml'
+require 'soda/client'
+require 'time'
+require 'active_support/core_ext/hash'
+require 'httparty'
+require 'erb'
+require 'logger'
+require 'octokit'
+require 'base64'
+
+class Time
+  require 'tzinfo'
+  def in_tz(tzstring)
+    tz = TZInfo::Timezone.get tzstring
+    p = tz.period_for_utc self
+    self + p.utc_offset
+  end
+
+  def to_socrata
+    self.strftime("%Y-%m-%dT%H:%M:%S")
+  end
+end
+
+class Box < Thor
+  include Thor::Actions
+
+  def initialize(*args)
+    super
+
+    # Shared clients
+    @config = YAML.load(ERB.new(File.new(File.expand_path(options[:config])).read).result).deep_symbolize_keys
+    @odn = SODA::Client.new(@config[:odn])
+
+    # Set up GitHub client
+    Octokit.configure do |c|
+      c.access_token = @config[:github][:access_token]
+    end
+
+    # Prefetch the whole tree
+    @tree = Octokit.tree(@config[:github][:repo], "master", :recursive => true)[:tree]
+
+    # We'll use this for memoization later
+    @schemas = {}
+
+    @log = Logger.new(STDOUT)
+    @log.level = options[:verbose] ? Logger::DEBUG : Logger::INFO
+  end
+
+  option :config, :required => true, :type => :string
+  desc 'bootstrap', 'Set our metadata datasets'
+  def bootstrap
+    @log.info "Creating metadata dataset"
+
+    # Create a new NBE dataset
+    dataset = create_dataset({
+      :name => "Sync Status",
+      :description => "Last sync and mapping information for Transmogrifier"
+    })
+    @log.info "Created dataset https://#{@config[:odn][:domain]}/d/#{dataset.id}"
+
+    apply_schema(dataset.id, [ {
+      :name => "ID",
+      :fieldName => "id",
+      :description => "Unique identifier",
+      :dataTypeName => "text",
+      :identifier => true
+    }, {
+      :name => "Source",
+      :fieldName => "source",
+      :description => "Source Dataset",
+      :dataTypeName => "text"
+    }, {
+      :name => "Source Domain",
+      :fieldName => "domain",
+      :description => "Source Domain",
+      :dataTypeName => "text"
+    }, {
+      :name => "Schema",
+      :fieldName => "schema",
+      :description => "Schema identifier",
+      :dataTypeName => "text"
+    }, {
+      :name => "Last Updated",
+      :fieldName => "last_updated",
+      :description => "The latest update from this dataset",
+      :dataTypeName => "number"
+    } ])
+
+    # Publish the dataset
+    @odn.post("/api/views/#{dataset.id}/publication.json")
+    @log.info "Published dataset"
+
+    @log.info "Add the following to the 'odn' key in your config:"
+    @log.info "status_dataset: #{dataset.id}"
+  end
+
+  option :config, :required => true, :type => :string
+  option :schema, :required => true
+  desc 'setup_dataset', 'Set up a dataset for a given schema'
+  def setup_dataset
+    # Find that schema in our tree
+    schema = fetch_yaml("schemas/#{options[:schema]}.yml")
+    @log.info "Creating schema for \"#{schema[:name]}\""
+
+    # Create a new NBE dataset
+    dataset = create_dataset({
+      :name => schema[:name],
+      :description => schema[:benefits]
+    })
+    @log.info "Created dataset https://#{@config[:odn][:domain]}/d/#{dataset.id}"
+
+    apply_schema(dataset.id, schema[:columns].collect { |col|
+      {
+        :name => col[:name],
+        :fieldName => col[:field_name],
+        :description => col[:description],
+        :dataTypeName => col[:data_type]
+      }
+    } + [ {
+      :name => "Global ID",
+      :fieldName => "global_id",
+      :description => "Unique identifier for each row",
+      :dataTypeName => "text",
+      :identifier => true
+    }, {
+      :name => "Source",
+      :fieldName => "source",
+      :description => "URI to the source of this data",
+      :dataTypeName => "text"
+    } ])
+
+    # Publish the dataset
+    @odn.post("/api/views/#{dataset.id}/publication.json")
+    @log.info "Published dataset"
+
+    @log.info "Add the following to the 'datasets' key in your config:"
+    @log.info "#{dataset.id}: #{options[:schema]}"
+  end
+
+  option :config, :required => true, :type => :string
+  desc 'update', 'Merge and update datasets'
+  def update
+    @config[:datasets].each do |uid, schema|
+      @schemas[schema] ||= fetch_yaml("schemas/#{schema}.yml")
+
+      # Iterate through all of the mappings for that schema
+      @tree.select { |f| f.path.match %r{mappings/.*/#{schema}} }.each do |f|
+        m = fetch_yaml(f.path)
+
+        # Fetch latest update details for this dataset
+        res = @odn.get(
+          @config[:odn][:status_dataset],
+          :id => [uid, schema].join("|")
+        ).first
+        last_updated = Time.at(res.nil? ? 0 : res.last_updated)
+
+        # Batch through all records after that timestamp
+        offset = 0
+        loop do
+          results = @odn.get(
+            m[:mapping][:base].gsub(/\.csv/, '.json'),
+            (m[:mapping][:query] || {}).merge({
+              "$where" => ":updated_at > '#{last_updated.gmtime.iso8601}'",
+              "$limit" => @config[:batch_size],
+              "$offset" => offset
+            })
+          )
+
+          # Bail!
+          break if results.size <= 0
+
+          # Update our results with the extra metadata that we need
+          results.each do |res|
+            # TODO: Yes I know this means that we'll never actually delete anything
+            # They call it a hack for a reason...
+            res = res.merge({
+              :global_id => res[":id"],
+              :source => m[:mapping][:base]
+            })
+            require 'pry'; binding.pry
+          end
+        end
+
+      end
+    end
+  end
+
+  ########################################
+  # App Tokens
+  ########################################
+  option :hours, :default => 48, :type => :numeric
+  option :config, :required => true, :type => :string
+  desc "fetch_app_tokens", "Fetches details of app tokens we've seen and updates our 'database'"
+  def fetch_app_tokens
+    # Fetch results for the specified period
+    from = Time.now - options[:hours] * 60 * 60
+    to = Time.now
+    @log.info "Fetching app token counts from #{from} to #{to}..."
+    results = @sumo.search_job(@config[:devstat][:apps][:query], from, to)
+
+    update = results["records"].collect { |rec|
+      begin
+        app_token = rec["map"]["app_token"]
+        next unless app_token =~ /^\w+$/
+
+        fetch_app_details(app_token)
+      rescue Error => e
+        @log.warn "Error \"#{e}\" retrieving details for this record, skipping: #{rec.inspect}"
+      end
+    }.compact
+
+    # Push this update to devstat
+    response = @devstat.post(@config[:devstat][:apps][:uid], update)
+    @log.info response.inspect
+  end
+
+  ########################################
+  # Utility
+  ########################################
+  desc "console", "Console, damnit"
+  option :config, :required => true
+  def console
+    require 'pry'; binding.pry
+  end
+
+  no_commands do
+    # Fetch a file from github
+    def fetch_yaml(path)
+      YAML.load(Base64.decode64(Octokit.content(@config[:github][:repo],
+        :path => @tree.select { |f| f.path == path }.first.path
+      ).content)).deep_symbolize_keys
+    end
+
+    def create_dataset(meta)
+      return @odn.post("/api/views.json?nbe=true", meta)
+    end
+
+    def apply_schema(uid, schema)
+      schema.each do |col|
+        is_id = col.delete(:identifier)
+        col = @odn.post("/api/views/#{uid}/columns.json", col)
+
+        if is_id
+          @odn.put("/api/views/#{uid}.json", { :rowIdentifierColumnId => col.id })
+        end
+      end
+    end
+
+    # Utility to fetch details for a dataset
+    def fetch_dataset_details(domain, uid)
+      # This annoys me but we need to do it.
+      # We need to iterate until we find a match or give up.
+      @config[:stacks].each do |name, config|
+        # Create a temporary config for this stack
+        client = SODA::Client.new(:domain => domain, :app_token => config[:app_token])
+
+        # Fetch details of this dataset from our API
+        ds = begin
+          client.get("/api/views/#{uid}.json")
+        rescue Exception => e
+          next # We'll try the other stack, just in case
+        end
+
+        dataset = {
+          :uid => uid,
+          :name => ds.name,
+          :url => "https://#{domain}/d/#{uid}",
+          :public => ds.grants.any? { |g| g.flags && g.flags.include?("public") },
+          :last_updated => Time.now.iso8601,
+          :domain => domain,
+          :obe => !ds.newBackend,
+          :owner_id => ds.owner.id,
+          :dataset => ds.viewType == "tabular" &&
+            ds.flags && ds.flags.include?("default")
+        }
+
+        # Only if it's a real dataset! I'm a real boy!
+        if dataset[:dataset]
+          # Fetch its migration details
+          dataset[:other_uid] = begin
+            mig = client.get("/api/migrations/#{uid}.json")
+            dataset[:obe] ? mig.nbeId : mig.obeId
+          rescue RuntimeError => e
+            nil
+          end
+        end
+
+        return dataset
+      end
+
+      # If we got here without finding anything, well, we're dealing with something unknown,
+      # probably private
+      return nil
+    end
+  end
+end
+
+Box.start

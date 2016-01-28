@@ -1,0 +1,14 @@
+batch_size: 10000
+odn:
+  username:  <%= ENV["ODN_USERNAME"] %>
+  password:  <%= ENV["ODN_PASSWORD"] %>
+  app_token: <%= ENV["ODN_APP_TOKEN"] %>
+  domain:    odn.data.socrata.com
+  status_dataset: bnca-7rbq
+
+github:
+  access_token: <%= ENV['GITHUB_ACCESS_TOKEN'] %>
+  repo: open-data-network/schema-mappings
+
+datasets:
+  btdc-t7mi: microschemas/points_of_interest
