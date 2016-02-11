@@ -13,6 +13,7 @@ require 'erb'
 require 'logger'
 require 'octokit'
 require 'base64'
+require 'csv'
 
 class Time
   require 'tzinfo'
@@ -147,77 +148,71 @@ class Box < Thor
   desc 'update', 'Merge and update datasets'
   def update
     @config[:datasets].each do |uid, schema|
+      puts "Updating #{uid} with #{schema}..."
       @schemas[schema] ||= fetch_yaml("schemas/#{schema}.yml")
+      headers = (["source", "global_id"] + @schemas[schema][:columns].collect { |c| c[:field_name] }).sort
 
-      # Iterate through all of the mappings for that schema
-      @tree.select { |f| f.path.match %r{mappings/.*/#{schema}} }.each do |f|
-        m = fetch_yaml(f.path)
+      # Create a temporary file where we'll collect our results
+      tmpfile = Tempfile.new([schema.gsub("/", "-"), ".csv"])
+      puts "Writing output for #{schema} to #{tmpfile.path}..."
+      CSV.open(tmpfile, "wb") do |csv|
+        # Write out a headers
+        csv << headers
 
-        # Fetch latest update details for this dataset
-        res = @odn.get(
-          @config[:odn][:status_dataset],
-          :id => [uid, schema].join("|")
-        ).first
-        last_updated = Time.at(res.nil? ? 0 : res.last_updated)
+        # Iterate through all of the mappings for that schema
+        Octokit.search_code("#{schema} path:/mappings repo:#{@config[:github][:repo]}")[:items].each do |f|
+          begin
+            puts "Processing #{f.path}..."
+            m = fetch_yaml(f.path)
 
-        # Batch through all records after that timestamp
-        offset = 0
-        loop do
-          results = @odn.get(
-            m[:mapping][:base].gsub(/\.csv/, '.json'),
-            (m[:mapping][:query] || {}).merge({
-              "$where" => ":updated_at > '#{last_updated.gmtime.iso8601}'",
-              "$limit" => @config[:batch_size],
-              "$offset" => offset
-            })
-          )
+            # Fetch the whole dataset in chunks
+            offset = 0
+            loop do
+              query = (m[:mapping][:query] || {}).merge({
+                  :$select => [ 
+                    (m[:mapping][:query][:$select] || "*"),
+                    ":id AS global_id, '#{m[:mapping][:base]}}' AS source"
+                  ].join(", "),
+                  :$limit => @config[:batch_size],
+                  :$offset => offset
+                })
 
-          # Bail!
-          break if results.size <= 0
+              if m[:mapping][:query][:$group]
+                query[:$group] = [
+                  m[:mapping][:query][:$group],
+                  "global_id, source"
+                ].join(", ")
+              end
 
-          # Update our results with the extra metadata that we need
-          results.each do |res|
-            # TODO: Yes I know this means that we'll never actually delete anything
-            # They call it a hack for a reason...
-            res = res.merge({
-              :global_id => res[":id"],
-              :source => m[:mapping][:base]
-            })
-            require 'pry'; binding.pry
+              results = @odn.get(
+                m[:mapping][:base].gsub(/\.csv$/, ".json"),
+                query
+              )
+
+              # Bail!
+              break if results.size <= 0
+
+              results.each do |res|
+                csv << headers.collect do |h| 
+                  if res[h].is_a?(Hashie::Mash) && res[h].type == "Point"
+                    "(#{res[h].coordinates[1]},#{res[h].coordinates[0]})"
+                  else
+                    res[h]
+                  end
+                end
+              end
+
+              offset += @config[:batch_size]
+            end
+          rescue Exception => e
+            puts "Error: #{e.inspect}, #{e.http_body}"
           end
         end
-
       end
+
+      puts "Updating dataset with DataSync..."
+      Kernel.exec("java -jar ./DataSync-1.6.2.jar -sc control.json -ph true -c config.json -f #{tmpfile.path} -i #{uid} -t IntegrationJob -m replace -h true")
     end
-  end
-
-  ########################################
-  # App Tokens
-  ########################################
-  option :hours, :default => 48, :type => :numeric
-  option :config, :required => true, :type => :string
-  desc "fetch_app_tokens", "Fetches details of app tokens we've seen and updates our 'database'"
-  def fetch_app_tokens
-    # Fetch results for the specified period
-    from = Time.now - options[:hours] * 60 * 60
-    to = Time.now
-    @log.info "Fetching app token counts from #{from} to #{to}..."
-    results = @sumo.search_job(@config[:devstat][:apps][:query], from, to)
-
-    update = results["records"].collect { |rec|
-      begin
-        app_token = rec["map"]["app_token"]
-        next unless app_token =~ /^\w+$/
-
-        fetch_app_details(app_token)
-      rescue Error => e
-        @log.warn "Error \"#{e}\" retrieving details for this record, skipping: #{rec.inspect}"
-      end
-    }.compact
-
-    # Push this update to devstat
-    response = @devstat.post(@config[:devstat][:apps][:uid], update)
-    @log.info response.inspect
   end
 
   ########################################
@@ -250,53 +245,6 @@ class Box < Thor
           @odn.put("/api/views/#{uid}.json", { :rowIdentifierColumnId => col.id })
         end
       end
-    end
-
-    # Utility to fetch details for a dataset
-    def fetch_dataset_details(domain, uid)
-      # This annoys me but we need to do it.
-      # We need to iterate until we find a match or give up.
-      @config[:stacks].each do |name, config|
-        # Create a temporary config for this stack
-        client = SODA::Client.new(:domain => domain, :app_token => config[:app_token])
-
-        # Fetch details of this dataset from our API
-        ds = begin
-          client.get("/api/views/#{uid}.json")
-        rescue Exception => e
-          next # We'll try the other stack, just in case
-        end
-
-        dataset = {
-          :uid => uid,
-          :name => ds.name,
-          :url => "https://#{domain}/d/#{uid}",
-          :public => ds.grants.any? { |g| g.flags && g.flags.include?("public") },
-          :last_updated => Time.now.iso8601,
-          :domain => domain,
-          :obe => !ds.newBackend,
-          :owner_id => ds.owner.id,
-          :dataset => ds.viewType == "tabular" &&
-            ds.flags && ds.flags.include?("default")
-        }
-
-        # Only if it's a real dataset! I'm a real boy!
-        if dataset[:dataset]
-          # Fetch its migration details
-          dataset[:other_uid] = begin
-            mig = client.get("/api/migrations/#{uid}.json")
-            dataset[:obe] ? mig.nbeId : mig.obeId
-          rescue RuntimeError => e
-            nil
-          end
-        end
-
-        return dataset
-      end
-
-      # If we got here without finding anything, well, we're dealing with something unknown,
-      # probably private
-      return nil
     end
   end
 end

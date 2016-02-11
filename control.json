@@ -1,0 +1,20 @@
+{
+  "action" : "Replace",
+  "csv" :
+  {
+    "useSocrataGeocoding" : false,
+    "ignoreColumns" : true,
+    "columns" : null,
+    "skip" : 0,
+    "fixedTimestampFormat" : ["ISO8601","MM/dd/yy","MM/dd/yyyy"],
+    "floatingTimestampFormat" : ["ISO8601","MM/dd/yy","MM/dd/yyyy"],
+    "timezone" : "UTC",
+    "separator" : ",",
+    "quote" : "\"",
+    "encoding" : "utf-8",
+    "emptyTextIsNull" : true,
+    "trimWhitespace" : true,
+    "trimServerWhitespace" : true,
+    "overrides" : {}
+  }
+}
