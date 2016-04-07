@@ -147,6 +147,16 @@ class Box < Thor
   option :config, :required => true, :type => :string
   desc 'update', 'Merge and update datasets'
   def update
+    # Generate a config.json
+    File.open('config.json', 'w') { |f| 
+      f.write({
+        :domain => ENV['ODN_DOMAIN'],
+        :username => ENV['ODN_USERNAME'],
+        :password => ENV['ODN_PASSWORD'],
+        :appToken => ENV['ODN_APP_TOKEN']
+      }.to_json())
+    }
+
     @config[:datasets].each do |uid, schema|
       puts "Updating #{uid} with #{schema}..."
       @schemas[schema] ||= fetch_yaml("schemas/#{schema}.yml")
