@@ -12,3 +12,12 @@ github:
 
 datasets:
   ki4q-6ek7: microschemas/points_of_interest
+
+supertrooper:
+  domain: odn.data.socrata.com
+  username:  <%= ENV["ODN_USERNAME"] %>
+  password:  <%= ENV["ODN_PASSWORD"] %>
+  app_token: <%= ENV["ODN_APP_TOKEN"] %>
+  agencies: https://moto.data.socrata.com/resource/fax2-dw8p
+  gazeteer: https://odn.data.socrata.com/resource/gm3u-gw57
+  dest_uid: h88a-ihpp

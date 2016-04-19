@@ -36,7 +36,7 @@ class Box < Thor
 
     # Shared clients
     @config = YAML.load(ERB.new(File.new(File.expand_path(options[:config])).read).result).deep_symbolize_keys
-    @odn = SODA::Client.new(@config[:odn])
+    @client = SODA::Client.new(@config[:odn])
 
     # Set up GitHub client
     Octokit.configure do |c|
@@ -94,7 +94,7 @@ class Box < Thor
     } ])
 
     # Publish the dataset
-    @odn.post("/api/views/#{dataset.id}/publication.json")
+    @client.post("/api/views/#{dataset.id}/publication.json")
     @log.info "Published dataset"
 
     @log.info "Add the following to the 'odn' key in your config:"
@@ -137,7 +137,7 @@ class Box < Thor
     } ])
 
     # Publish the dataset
-    @odn.post("/api/views/#{dataset.id}/publication.json")
+    @client.post("/api/views/#{dataset.id}/publication.json")
     @log.info "Published dataset"
 
     @log.info "Add the following to the 'datasets' key in your config:"
@@ -147,15 +147,7 @@ class Box < Thor
   option :config, :required => true, :type => :string
   desc 'update', 'Merge and update datasets'
   def update
-    # Generate a config.json
-    File.open('config.json', 'w') { |f| 
-      f.write({
-        :domain => ENV['ODN_DOMAIN'],
-        :username => ENV['ODN_USERNAME'],
-        :password => ENV['ODN_PASSWORD'],
-        :appToken => ENV['ODN_APP_TOKEN']
-      }.to_json())
-    }
+    setup_config_json @config[:odn]
 
     @config[:datasets].each do |uid, schema|
       puts "Updating #{uid} with #{schema}..."
@@ -194,7 +186,7 @@ class Box < Thor
                 ].join(", ")
               end
 
-              results = @odn.get(
+              results = @client.get(
                 m[:mapping][:base].gsub(/\.csv$/, ".json"),
                 query
               )
@@ -225,6 +217,65 @@ class Box < Thor
     end
   end
 
+  option :config, :required => true, :type => :string
+  desc 'supertrooper', 'Merge and aggregate crime datasets from moto.data.socrata.com'
+  def supertrooper
+    setup_config_json @config[:supertrooper]
+
+    # Create a temporary file where we'll collect our results
+    tmpfile = Tempfile.new(["supertroopers", ".csv"])
+    puts "Writing output for supertroopers to #{tmpfile.path}..."
+    CSV.open(tmpfile, "wb") do |csv|
+      # Write out a headers
+      csv << [:id, :name, :type, :date, :year, :month, :crime_type, :crime_count, :crime_rate, :location, :source_agency, :base_population]
+
+      # Fetch the agencies dataset
+      @client.get(@config[:supertrooper][:agencies], { :agency_type => "Police Dept" }).each do |agency|
+        # Figure out what geo this is most likely near
+        cities = @client.get(@config[:supertrooper][:gazeteer],
+                              {
+                                :type => :place,
+                                :$order => "distance_in_meters(location, 'POINT (#{agency.center.coordinates.join(' ')})') ASC",
+                                :$select => "*, distance_in_meters(location, 'POINT (#{agency.center.coordinates.join(' ')})') AS range",
+                                :$q => agency.city,
+                                :$limit => 5
+
+        })
+
+        if(cities.count > 0 && cities.first.range.to_i < 5000)
+          # Fetch crime counts for this city
+          @client.get("https://#{agency.domain}/resource/#{agency.incident_dataset}",
+                                {
+                                  :$group => 'date_trunc_ym(incident_datetime), parent_incident_type',
+                                  :$select => 'date_trunc_ym(incident_datetime) AS year_month, parent_incident_type, COUNT(*) AS total',
+                                  :$where => 'incident_datetime IS NOT NULL'
+          }).each do |res|
+            ym = DateTime.parse(res.year_month)
+
+            # Dump to our CSV!
+            csv << [
+              cities.first.id,
+              cities.first.name,
+              "place",
+              res.year_month,
+              ym.year,
+              ym.month,
+              res.parent_incident_type,
+              res.total.to_i,
+              res.total.to_f / cities.first.population.to_f,
+              "(#{cities.first.location.coordinates.reverse.join(",")})",
+              agency.agency_name,
+              cities.first.population.to_i
+            ]
+          end
+        end
+      end
+
+      puts "Updating dataset with DataSync..."
+      Kernel.exec("java -jar ./DataSync-1.6.2.jar -sc control.json -ph true -c config.json -f #{tmpfile.path} -i #{@config[:supertrooper][:dest_uid]} -t IntegrationJob -m replace -h true")
+    end
+  end
+
   ########################################
   # Utility
   ########################################
@@ -243,18 +294,30 @@ class Box < Thor
     end
 
     def create_dataset(meta)
-      return @odn.post("/api/views.json?nbe=true", meta)
+      return @client.post("/api/views.json?nbe=true", meta)
     end
 
     def apply_schema(uid, schema)
       schema.each do |col|
         is_id = col.delete(:identifier)
-        col = @odn.post("/api/views/#{uid}/columns.json", col)
+        col = @client.post("/api/views/#{uid}/columns.json", col)
 
         if is_id
-          @odn.put("/api/views/#{uid}.json", { :rowIdentifierColumnId => col.id })
+          @client.put("/api/views/#{uid}.json", { :rowIdentifierColumnId => col.id })
         end
       end
+    end
+
+    def setup_config_json(config)
+      # Generate a config.json
+      File.open('config.json', 'w') { |f| 
+        f.write({
+          :domain => config[:domain],
+          :username => config[:username],
+          :password => config[:password],
+          :appToken => config[:app_token]
+        }.to_json())
+      }
     end
   end
 end
