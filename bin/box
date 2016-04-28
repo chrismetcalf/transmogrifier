@@ -14,6 +14,7 @@ require 'logger'
 require 'octokit'
 require 'base64'
 require 'csv'
+require 'sqlite3'
 
 class Time
   require 'tzinfo'
@@ -222,53 +223,87 @@ class Box < Thor
   def supertrooper
     setup_config_json @config[:supertrooper]
 
+    # We'll use SQLite for some magic because I hate doing math
+    db = SQLite3::Database.new Tempfile.new(['superdb', '.csv']).path
+    db.execute <<-SQL
+      create table crime_stats (
+        geoid varchar(30),
+        year_month varchar(30),
+        parent_incident_type varchar(30),
+        total int
+      );
+    SQL
+
+    # We'll minimally simplify geometries and only further simplify them if we have to
+    CSV.parse(@client.get(@config[:supertrooper][:places] + ".csv", 
+                          :$select => "SIMPLIFY_PRESERVE_TOPOLOGY(the_geom, #{@config[:supertrooper][:simplify]}) AS the_geom, geoid, namelsad",
+                          :$limit => 50000), headers: true).each do |row|
+
+      begin
+        # If our geom is too long, we'll further simplify it
+        simpl = @config[:supertrooper][:simplify]
+        while row["the_geom"].length > @config[:supertrooper][:max_geom_length]
+          simpl *= 2
+          new_row = CSV.parse(@client.get(@config[:supertrooper][:places] + ".csv",
+                              :$select => "SIMPLIFY(the_geom, #{simpl}) AS the_geom",
+                              :geoid => row["geoid"],
+                              :$limit => 1), headers: true).first
+          row["the_geom"] = new_row["the_geom"]
+        end
+
+        puts "### #{row["namelsad"]}, #{row["geoid"]}: #{row["the_geom"].length} at #{simpl}"
+
+        # Now we fetch the police departments that apply here and add them to our DB
+        @client.get(@config[:supertrooper][:agencies], :$where => "INTERSECTS(agency_shape, '#{row["the_geom"]}')").each do |agency|
+          puts "Fetching stats for #{agency.agency_name} in #{agency.city}, #{agency.state}"
+          @client.get("https://#{agency.domain}/resource/#{agency.incident_dataset}",
+                      :$where => "INTERSECTS(location, '#{row["the_geom"]}') AND incident_datetime IS NOT NULL",
+                      :$group => 'date_trunc_ym(incident_datetime), parent_incident_type',
+                      :$select => 'date_trunc_ym(incident_datetime) AS year_month, parent_incident_type, COUNT(*) AS total').each do |stat|
+                        db.execute("INSERT INTO crime_stats (geoid, year_month, parent_incident_type, total) VALUES (?, ?, ?, ?)",
+                                   ["1600000US#{row["geoid"]}", stat.year_month, stat.parent_incident_type, stat.total])
+                      end
+        end
+      rescue Exception => e
+        puts "Caught #{e.inspect} processing #{row["namelsad"]}, #{row["geoid"]}"
+      end
+    end
+
+    # Fetch place details and populations
+    places = @client.get(@config[:supertrooper][:gazeteer], :$limit => 50000).inject({}) { |mem, c| mem[c.id] = c; mem }
+
     # Create a temporary file where we'll collect our results
     tmpfile = Tempfile.new(["supertroopers", ".csv"])
     puts "Writing output for supertroopers to #{tmpfile.path}..."
     CSV.open(tmpfile, "wb") do |csv|
       # Write out a headers
-      csv << [:id, :name, :type, :date, :year, :month, :crime_type, :crime_count, :crime_rate, :location, :source_agency, :base_population]
+      csv << [:id, :name, :type, :date, :year, :month, :crime_type, :crime_count, :crime_rate, :location, :base_population]
 
-      # Fetch the agencies dataset
-      @client.get(@config[:supertrooper][:agencies], { :agency_type => "Police Dept" }).each do |agency|
-        # Figure out what geo this is most likely near
-        cities = @client.get(@config[:supertrooper][:gazeteer],
-                              {
-                                :type => :place,
-                                :$order => "distance_in_meters(location, 'POINT (#{agency.center.coordinates.join(' ')})') ASC",
-                                :$select => "*, distance_in_meters(location, 'POINT (#{agency.center.coordinates.join(' ')})') AS range",
-                                :$q => agency.city,
-                                :$limit => 5
+      db.execute("SELECT geoid, year_month, parent_incident_type, SUM(total) FROM crime_stats GROUP BY geoid, year_month, parent_incident_type").each do |res|
+        ym = DateTime.parse(res[1])
 
-        })
+        # Fetch our matching place
+        place = places[res[0]]
 
-        if(cities.count > 0 && cities.first.range.to_i < 5000)
-          # Fetch crime counts for this city
-          @client.get("https://#{agency.domain}/resource/#{agency.incident_dataset}",
-                                {
-                                  :$group => 'date_trunc_ym(incident_datetime), parent_incident_type',
-                                  :$select => 'date_trunc_ym(incident_datetime) AS year_month, parent_incident_type, COUNT(*) AS total',
-                                  :$where => 'incident_datetime IS NOT NULL'
-          }).each do |res|
-            ym = DateTime.parse(res.year_month)
-
-            # Dump to our CSV!
-            csv << [
-              cities.first.id,
-              cities.first.name,
-              "place",
-              res.year_month,
-              ym.year,
-              ym.month,
-              res.parent_incident_type,
-              res.total.to_i,
-              res.total.to_f / cities.first.population.to_f,
-              "(#{cities.first.location.coordinates.reverse.join(",")})",
-              agency.agency_name,
-              cities.first.population.to_i
-            ]
-          end
+        if place.nil?
+          puts "No match for #{res.inspect}"
+          next
         end
+
+        # Dump to our CSV!
+        csv << [
+          place.id,
+          place.name,
+          "place",
+          res[1],
+          ym.year,
+          ym.month,
+          res[2],
+          res[3],
+          res[3].to_f / place.population.to_f,
+          "(#{place.location.coordinates.reverse.join(",")})",
+          place.population.to_i
+        ]
       end
 
       puts "Updating dataset with DataSync..."
