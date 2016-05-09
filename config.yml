@@ -21,6 +21,7 @@ supertrooper:
   agencies: https://moto.data.socrata.com/resource/fax2-dw8p
   gazeteer: https://odn.data.socrata.com/resource/gm3u-gw57
   places: https://odn.data.socrata.com/resource/h7w8-g2pa
-  dest_uid: yq6p-fzyt
+  ym_dest_uid: yq6p-fzyt
+  y_dest_uid: drhh-dey3
   max_geom_length: 4000
   simplify: 0.001

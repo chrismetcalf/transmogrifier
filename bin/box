@@ -229,6 +229,8 @@ class Box < Thor
       create table crime_stats (
         geoid varchar(30),
         year_month varchar(30),
+        year int,
+        month int,
         parent_incident_type varchar(30),
         total int
       );
@@ -260,8 +262,9 @@ class Box < Thor
                       :$where => "INTERSECTS(location, '#{row["the_geom"]}') AND incident_datetime IS NOT NULL",
                       :$group => 'date_trunc_ym(incident_datetime), parent_incident_type',
                       :$select => 'date_trunc_ym(incident_datetime) AS year_month, parent_incident_type, COUNT(*) AS total').each do |stat|
-                        db.execute("INSERT INTO crime_stats (geoid, year_month, parent_incident_type, total) VALUES (?, ?, ?, ?)",
-                                   ["1600000US#{row["geoid"]}", stat.year_month, stat.parent_incident_type, stat.total])
+                        ym = DateTime.parse(stat.year_month)
+                        db.execute("INSERT INTO crime_stats (geoid, year, month, parent_incident_type, total) VALUES (?, ?, ?, ?, ?)",
+                                   ["1600000US#{row["geoid"]}", ym.year, ym.month, stat.parent_incident_type, stat.total])
                       end
         end
       rescue Exception => e
@@ -272,21 +275,23 @@ class Box < Thor
     # Fetch place details and populations
     places = @client.get(@config[:supertrooper][:gazeteer], :$limit => 50000).inject({}) { |mem, c| mem[c.id] = c; mem }
 
-    # Create a temporary file where we'll collect our results
-    tmpfile = Tempfile.new(["supertroopers", ".csv"])
-    puts "Writing output for supertroopers to #{tmpfile.path}..."
-    CSV.open(tmpfile, "wb") do |csv|
+    # Year-Month
+    ym_tmpfile = Tempfile.new(["supertroopers-ym", ".csv"])
+    puts "Writing year-month output for supertroopers to #{ym_tmpfile.path}..."
+    CSV.open(ym_tmpfile, "wb") do |csv|
       # Write out a headers
       csv << [:id, :name, :type, :date, :year, :month, :crime_type, :crime_count, :crime_rate, :location, :base_population]
 
-      db.execute("SELECT geoid, year_month, parent_incident_type, SUM(total) FROM crime_stats GROUP BY geoid, year_month, parent_incident_type").each do |res|
-        ym = DateTime.parse(res[1])
+      db.execute("SELECT geoid, year, month, parent_incident_type, SUM(total) FROM crime_stats GROUP BY geoid, year, month, parent_incident_type").each do |res|
 
         # Fetch our matching place
         place = places[res[0]]
 
         if place.nil?
           puts "No match for #{res.inspect}"
+          next
+        elsif(place.population.nil? || place.population.empty? || place.population.to_i <= 0)
+          puts "Zero or empty population for #{res.inspect}"
           next
         end
 
@@ -295,9 +300,48 @@ class Box < Thor
           place.id,
           place.name,
           "place",
+          "#{res[1]}-#{res[2]}-01T00:00:00",
           res[1],
-          ym.year,
-          ym.month,
+          res[2],
+          res[3],
+          res[4],
+          res[4].to_f / place.population.to_f,
+          "(#{place.location.coordinates.reverse.join(",")})",
+          place.population.to_i
+        ]
+      end
+
+      puts "Updating dataset with DataSync..."
+      Kernel.exec("java -jar ./DataSync-1.6.2.jar -sc control.json -ph true -c config.json -f #{ym_tmpfile.path} -i #{@config[:supertrooper][:ym_dest_uid]} -t IntegrationJob -m replace -h true")
+    end
+
+    # Yearly
+    y_tmpfile = Tempfile.new(["supertroopers-ym", ".csv"])
+    puts "Writing year-month output for supertroopers to #{y_tmpfile.path}..."
+    CSV.open(y_tmpfile, "wb") do |csv|
+      # Write out a headers
+      csv << [:id, :name, :type, :date, :year, :crime_type, :crime_count, :crime_rate, :location, :base_population]
+
+      db.execute("SELECT geoid, year, parent_incident_type, SUM(total) FROM crime_stats GROUP BY geoid, year, parent_incident_type").each do |res|
+
+        # Fetch our matching place
+        place = places[res[0]]
+
+        if place.nil?
+          puts "No match for #{res.inspect}"
+          next
+        elsif(place.population.nil? || place.population.empty? || place.population.to_i <= 0)
+          puts "Zero or empty population for #{res.inspect}"
+          next
+        end
+
+        # Dump to our CSV!
+        csv << [
+          place.id,
+          place.name,
+          "place",
+          "#{res[1]}-01-01T00:00:00",
+          res[1],
           res[2],
           res[3],
           res[3].to_f / place.population.to_f,
@@ -307,7 +351,7 @@ class Box < Thor
       end
 
       puts "Updating dataset with DataSync..."
-      Kernel.exec("java -jar ./DataSync-1.6.2.jar -sc control.json -ph true -c config.json -f #{tmpfile.path} -i #{@config[:supertrooper][:dest_uid]} -t IntegrationJob -m replace -h true")
+      Kernel.exec("java -jar ./DataSync-1.6.2.jar -sc control.json -ph true -c config.json -f #{y_tmpfile.path} -i #{@config[:supertrooper][:y_dest_uid]} -t IntegrationJob -m replace -h true")
     end
   end
 
