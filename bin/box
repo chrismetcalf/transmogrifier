@@ -254,10 +254,13 @@ class Box < Thor
           row["the_geom"] = new_row["the_geom"]
         end
 
-        puts "### #{row["namelsad"]}, #{row["geoid"]}: #{row["the_geom"].length} at #{simpl}"
 
         # Now we fetch the police departments that apply here and add them to our DB
-        @client.get(@config[:supertrooper][:agencies], :$where => "INTERSECTS(agency_shape, '#{row["the_geom"]}')").each do |agency|
+        agencies = @client.get(@config[:supertrooper][:agencies], :$where => "INTERSECTS(agency_shape, '#{row["the_geom"]}')")
+        # puts "WITHIN_CIRCLE(center, #{row["intptlat"].to_f}, #{row["intptlon"].to_f}, 40000 )"
+        # agencies = @client.get(@config[:supertrooper][:agencies], :$where => "WITHIN_CIRCLE(center, #{row["intptlat"].to_f}, #{row["intptlon"].to_f}, 40000 )")
+        puts "### #{row["namelsad"]}, #{row["geoid"]}: #{row["the_geom"].length} at #{simpl}, matches #{agencies.length} agencies"
+        agencies.each do |agency|
           puts "Fetching stats for #{agency.agency_name} in #{agency.city}, #{agency.state}"
           @client.get("https://#{agency.domain}/resource/#{agency.incident_dataset}",
                       :$where => "INTERSECTS(location, '#{row["the_geom"]}') AND incident_datetime IS NOT NULL",
