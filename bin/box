@@ -207,7 +207,7 @@ class Box < Thor
 
               offset += @config[:batch_size]
             end
-          rescue Exception => e
+          rescue SODA::Exception => e
             puts "Error: #{e.inspect}, #{e.http_body}"
           end
         end
