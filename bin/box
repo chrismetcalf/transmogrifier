@@ -15,6 +15,7 @@ require 'octokit'
 require 'base64'
 require 'csv'
 require 'sqlite3'
+require 'fileutils'
 
 class Time
   require 'tzinfo'
@@ -311,12 +312,17 @@ class Box < Thor
         ]
       end
 
-      puts "Updating dataset with DataSync..."
-      Kernel.exec("java -jar ./DataSync-1.6.2.jar -sc control.json -ph true -c config.json -f #{ym_tmpfile.path} -i #{@config[:supertrooper][:ym_dest_uid]} -t IntegrationJob -m replace -h true")
+      if(@config[:supertrooper][:ym_dest_uid])
+        puts "Updating dataset with DataSync..."
+        Kernel.exec("java -jar ./DataSync-1.6.2.jar -sc control.json -ph true -c config.json -f #{ym_tmpfile.path} -i #{@config[:supertrooper][:ym_dest_uid]} -t IntegrationJob -m replace -h true")
+      else
+        puts "Copying #{ym_tmpfile.path} to #{Dir.pwd}..."
+        FileUtils.cp ym_tmpfile.path, Dir.pwd
+      end
     end
 
     # Yearly
-    y_tmpfile = Tempfile.new(["supertroopers-ym", ".csv"])
+    y_tmpfile = Tempfile.new(["supertroopers-y", ".csv"])
     puts "Writing year-month output for supertroopers to #{y_tmpfile.path}..."
     CSV.open(y_tmpfile, "wb") do |csv|
       # Write out a headers
@@ -350,8 +356,13 @@ class Box < Thor
         ]
       end
 
-      puts "Updating dataset with DataSync..."
-      Kernel.exec("java -jar ./DataSync-1.6.2.jar -sc control.json -ph true -c config.json -f #{y_tmpfile.path} -i #{@config[:supertrooper][:y_dest_uid]} -t IntegrationJob -m replace -h true")
+      if @config[:supertrooper][:y_dest_uid]
+        puts "Updating dataset with DataSync..."
+        Kernel.exec("java -jar ./DataSync-1.6.2.jar -sc control.json -ph true -c config.json -f #{y_tmpfile.path} -i #{@config[:supertrooper][:y_dest_uid]} -t IntegrationJob -m replace -h true")
+      else
+        puts "Copying #{y_tmpfile.path} to #{Dir.pwd}..."
+        FileUtils.cp y_tmpfile.path, Dir.pwd
+      end
     end
   end
 
