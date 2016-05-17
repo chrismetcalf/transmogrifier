@@ -248,7 +248,7 @@ class Box < Thor
         while row["the_geom"].length > @config[:supertrooper][:max_geom_length]
           simpl *= 2
           new_row = CSV.parse(@client.get(@config[:supertrooper][:places] + ".csv",
-                              :$select => "SIMPLIFY(the_geom, #{simpl}) AS the_geom",
+                              :$select => "SIMPLIFY(the_geom, #{simpl}) AS the_geom, geoid, namelsad",
                               :geoid => row["geoid"],
                               :$limit => 1), headers: true).first
           row["the_geom"] = new_row["the_geom"]
