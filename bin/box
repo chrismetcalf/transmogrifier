@@ -16,6 +16,7 @@ require 'base64'
 require 'csv'
 require 'sqlite3'
 require 'fileutils'
+require 'ruby-progressbar'
 
 class Time
   require 'tzinfo'
@@ -173,7 +174,7 @@ class Box < Thor
             offset = 0
             loop do
               query = (m[:mapping][:query] || {}).merge({
-                  :$select => [ 
+                  :$select => [
                     (m[:mapping][:query][:$select] || "*"),
                     ":id AS global_id, '#{m[:mapping][:base]}' AS source"
                   ].join(", "),
@@ -197,7 +198,7 @@ class Box < Thor
               break if results.size <= 0
 
               results.each do |res|
-                csv << headers.collect do |h| 
+                csv << headers.collect do |h|
                   if res[h].is_a?(Hashie::Mash) && res[h].type == "Point"
                     "(#{res[h].coordinates[1]},#{res[h].coordinates[0]})"
                   else
@@ -219,65 +220,117 @@ class Box < Thor
     end
   end
 
+
+  # Magic to get Spatialite working:
   option :config, :required => true, :type => :string
   desc 'supertrooper', 'Merge and aggregate crime datasets from moto.data.socrata.com'
   def supertrooper
     setup_config_json @config[:supertrooper]
 
     # We'll use SQLite for some magic because I hate doing math
-    db = SQLite3::Database.new Tempfile.new(['superdb', '.csv']).path
+    db_file = 'superdb.sqlite'
+    puts "Initializing superdb at #{db_file}..."
+    db = SQLite3::Database.new db_file
+
+    # Create the table we'll accumulate stats in
+    db.execute "DROP TABLE IF EXISTS crime_counts;"
     db.execute <<-SQL
-      create table crime_stats (
-        geoid varchar(30),
-        year_month varchar(30),
-        year int,
-        month int,
-        parent_incident_type varchar(30),
-        total int
+      CREATE TABLE crime_counts (
+        geoid VARCHAR(30),
+        year INT,
+        month INT,
+        parent_incident_type VARCHAR(100),
+        count INT
       );
     SQL
+    db.execute <<-SQL
+      CREATE UNIQUE INDEX crime_counts_index
+        ON crime_counts (geoid, year, month, parent_incident_type);
+    SQL
+    db.busy_timeout = 5000 # Give up to 500ms to clear a lock
 
-    # We'll minimally simplify geometries and only further simplify them if we have to
-    CSV.parse(@client.get(@config[:supertrooper][:places] + ".csv", 
-                          :$select => "SIMPLIFY_PRESERVE_TOPOLOGY(the_geom, #{@config[:supertrooper][:simplify]}) AS the_geom, geoid, namelsad",
-                          :$limit => 50000), headers: true).each do |row|
+    # Load the table we'll use for places lookup
+    puts "Loading places DB from #{@config[:supertrooper][:places_db]}..."
+    places_db = SQLite3::Database.new @config[:supertrooper][:places_db]
 
-      begin
-        # If our geom is too long, we'll further simplify it
-        simpl = @config[:supertrooper][:simplify]
-        while row["the_geom"].length > @config[:supertrooper][:max_geom_length]
-          simpl *= 2
-          new_row = CSV.parse(@client.get(@config[:supertrooper][:places] + ".csv",
-                              :$select => "SIMPLIFY(the_geom, #{simpl}) AS the_geom, geoid, namelsad",
-                              :geoid => row["geoid"],
-                              :$limit => 1), headers: true).first
-          row["the_geom"] = new_row["the_geom"]
+    # Let's enable spatialite so we can do geospatial queries
+    places_db.enable_load_extension(1)
+    places_db.load_extension "mod_spatialite"
+    places_db.enable_load_extension(0)
+
+    lookup_stmt = places_db.prepare <<-SQL
+      SELECT
+        geoid,
+        name
+      FROM places p
+      WHERE
+        Contains(
+          the_geom,
+          MakePoint(:longitude, :latitude)
+        )
+        AND p.rowid IN (
+          SELECT pkid
+          FROM idx_places_the_geom
+          WHERE
+            xmin <= :longitude
+            AND xmax >= :longitude
+            AND ymin <= :latitude
+            AND ymax >= :latitude
+        )
+      LIMIT 1;
+    SQL
+
+    agencies = @client.get(@config[:supertrooper][:agencies], :$where => @config[:supertrooper][:agency_filter], :$order => "agency_name", :$limit => 50000)
+    bar = ProgressBar.create(
+      title: "Agencies", 
+      format: '%a |%b👮%i| %p%% %t',
+      total: agencies.size)
+
+    agencies.each do |agency|
+      results = []
+      offset = 0
+      loop do
+        results = @client.get("https://#{agency.domain}/resource/#{agency.incident_dataset}",
+                              :$where => "incident_datetime >= '2015-01-01'",
+                              :$order => "incident_datetime",
+                              :$offset => offset,
+                              :$limit => @config[:batch_size])
+        break if results.size <= 0
+
+        results.each do |res|
+          # Look up what geom its in
+          place = lookup_stmt.execute(:longitude => res.longitude, :latitude => res.latitude).next
+          next if place.nil?
+
+          geoid = place[0]
+          date = DateTime.parse(res.incident_datetime)
+
+          # Increment the appropriate counter
+          db.execute <<-SQL
+            INSERT OR REPLACE INTO crime_counts
+            VALUES ('#{geoid}', #{date.year}, #{date.month}, '#{res.parent_incident_type}',
+              COALESCE(
+                (SELECT count FROM crime_counts
+                  WHERE
+                    geoid = '#{geoid}'
+                    AND year = #{date.year}
+                    AND month = #{date.month}
+                    AND parent_incident_type = '#{res.parent_incident_type}'),
+                0) + 1);
+          SQL
+          bar.refresh
         end
 
-
-        # Now we fetch the police departments that apply here and add them to our DB
-        agencies = @client.get(@config[:supertrooper][:agencies], :$where => "INTERSECTS(agency_shape, '#{row["the_geom"]}')")
-        # puts "WITHIN_CIRCLE(center, #{row["intptlat"].to_f}, #{row["intptlon"].to_f}, 40000 )"
-        # agencies = @client.get(@config[:supertrooper][:agencies], :$where => "WITHIN_CIRCLE(center, #{row["intptlat"].to_f}, #{row["intptlon"].to_f}, 40000 )")
-        puts "### #{row["namelsad"]}, #{row["geoid"]}: #{row["the_geom"].length} at #{simpl}, matches #{agencies.length} agencies"
-        agencies.each do |agency|
-          puts "Fetching stats for #{agency.agency_name} in #{agency.city}, #{agency.state}"
-          @client.get("https://#{agency.domain}/resource/#{agency.incident_dataset}",
-                      :$where => "INTERSECTS(location, '#{row["the_geom"]}') AND incident_datetime IS NOT NULL",
-                      :$group => 'date_trunc_ym(incident_datetime), parent_incident_type',
-                      :$select => 'date_trunc_ym(incident_datetime) AS year_month, parent_incident_type, COUNT(*) AS total').each do |stat|
-                        ym = DateTime.parse(stat.year_month)
-                        db.execute("INSERT INTO crime_stats (geoid, year, month, parent_incident_type, total) VALUES (?, ?, ?, ?, ?)",
-                                   ["1600000US#{row["geoid"]}", ym.year, ym.month, stat.parent_incident_type, stat.total])
-                      end
-        end
-      rescue Exception => e
-        puts "Caught #{e.inspect} processing #{row["namelsad"]}, #{row["geoid"]}"
+        offset += @config[:batch_size]
       end
+
+      bar.increment
     end
 
+    require 'pry'; binding.pry
+
     # Fetch place details and populations
-    places = @client.get(@config[:supertrooper][:gazeteer], :$limit => 50000).inject({}) { |mem, c| mem[c.id] = c; mem }
+    gazeteer = @client.get(@config[:supertrooper][:gazeteer], :type => "place", :$limit => 50000).inject({}) { |mem, c| mem[c.id] = c; mem }
 
     # Year-Month
     ym_tmpfile = Tempfile.new(["supertroopers-ym", ".csv"])
@@ -286,10 +339,10 @@ class Box < Thor
       # Write out a headers
       csv << [:id, :name, :type, :date, :year, :month, :crime_type, :crime_count, :crime_rate, :location, :base_population]
 
-      db.execute("SELECT geoid, year, month, parent_incident_type, SUM(total) FROM crime_stats GROUP BY geoid, year, month, parent_incident_type").each do |res|
+      db.execute("SELECT geoid, year, month, parent_incident_type, count FROM crime_counts").each do |res|
 
         # Fetch our matching place
-        place = places[res[0]]
+        place = gazeteer["1600000US" + res[0]]
 
         if place.nil?
           puts "No match for #{res.inspect}"
@@ -331,10 +384,10 @@ class Box < Thor
       # Write out a headers
       csv << [:id, :name, :type, :date, :year, :crime_type, :crime_count, :crime_rate, :location, :base_population]
 
-      db.execute("SELECT geoid, year, parent_incident_type, SUM(total) FROM crime_stats GROUP BY geoid, year, parent_incident_type").each do |res|
+      db.execute("SELECT geoid, year, parent_incident_type, SUM(count) FROM crime_counts GROUP BY geoid, year, parent_incident_type").each do |res|
 
         # Fetch our matching place
-        place = places[res[0]]
+        place = gazeteer["1600000US" + res[0]]
 
         if place.nil?
           puts "No match for #{res.inspect}"
@@ -367,6 +420,8 @@ class Box < Thor
         FileUtils.cp y_tmpfile.path, Dir.pwd
       end
     end
+
+    puts "🚨🚨🚨 Done!!! 🚨🚨🚨"
   end
 
   ########################################
@@ -403,7 +458,7 @@ class Box < Thor
 
     def setup_config_json(config)
       # Generate a config.json
-      File.open('config.json', 'w') { |f| 
+      File.open('config.json', 'w') { |f|
         f.write({
           :domain => config[:domain],
           :username => config[:username],

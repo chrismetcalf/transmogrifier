@@ -3,6 +3,7 @@ odn:
   username:  <%= ENV["ODN_USERNAME"] %>
   password:  <%= ENV["ODN_PASSWORD"] %>
   app_token: <%= ENV["ODN_APP_TOKEN"] %>
+  ignore_ssl: true
   domain:    odn.data.socrata.com
   status_dataset: bnca-7rbq
 
@@ -19,9 +20,12 @@ supertrooper:
   password:  <%= ENV["ODN_PASSWORD"] %>
   app_token: <%= ENV["ODN_APP_TOKEN"] %>
   agencies: https://moto.data.socrata.com/resource/fax2-dw8p
+  # agency_filter: "state IN ('MD', 'VA', 'DC') AND account_type != 'Missing'"
+  agency_filter: "account_type != 'Missing'"
   gazeteer: https://odn.data.socrata.com/resource/gm3u-gw57
   places: https://odn.data.socrata.com/resource/h7w8-g2pa
-  ym_dest_uid: yq6p-fzyt
-  y_dest_uid: drhh-dey3
+  places_db: regions/places.sqlite
+  # ym_dest_uid: yq6p-fzyt
+  # y_dest_uid: drhh-dey3
   max_geom_length: 4000
   simplify: 0.001

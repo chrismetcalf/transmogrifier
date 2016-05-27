@@ -1,0 +1,24 @@
+#!/bin/sh
+# Generates a sqlite DB based off our places DB
+set -e
+
+pushd regions
+
+if [ -f "places.zip" ]; then
+  echo "Using existing places.zip"
+else
+  echo "Fetching regions Shapefile..."
+  wget -O places.zip "https://odn.data.socrata.com/api/geospatial/7i47-z9xk?method=export&format=Shapefile"
+fi
+
+echo "Unpacking..."
+unzip -o places.zip
+
+echo "Generating Spatialite DB..."
+rm 'places.sqlite'
+spatialite_tool --import -shp geo_export_357062d2-ac32-41ee-9f7b-7d42374930e1 -t places -d places.sqlite -g the_geom -c UTF-8
+
+echo "Adding spatial index..."
+spatialite places.sqlite "SELECT CreateSpatialIndex('places', 'the_geom')"
+
+popd
