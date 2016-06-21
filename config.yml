@@ -29,3 +29,13 @@ supertrooper:
   # y_dest_uid: drhh-dey3
   max_geom_length: 4000
   simplify: 0.001
+
+macklin:
+  timeout: 360
+  domain: odn.data.socrata.com
+  username:  <%= ENV["ODN_USERNAME"] %>
+  password:  <%= ENV["ODN_PASSWORD"] %>
+  app_token: <%= ENV["ODN_APP_TOKEN"] %>
+  roster: https://odn.data.socrata.com/resource/7g2b-8brv
+  states: https://odn.data.socrata.com/resource/9qwh-uq8v
+  dest_uid: 525c-3tqu

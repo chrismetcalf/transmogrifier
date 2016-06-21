@@ -17,6 +17,9 @@ require 'csv'
 require 'sqlite3'
 require 'fileutils'
 require 'ruby-progressbar'
+require 'roo'
+require 'roo-xls'
+require 'enumerator'
 
 class Time
   require 'tzinfo'
@@ -220,6 +223,105 @@ class Box < Thor
     end
   end
 
+  # Pull FBC UCR Data
+  option :config, :required => true, :type => :string
+  desc 'macklin', 'Merge and aggregate crime datasets from FBI UCR Data'
+  def macklin
+    puts "\"Burt Macklin, FBI. The best damn agent they had, until I was framed for a crime I didn't commit... Stealing the President's rubies.\" 😎"
+
+    year = 2014
+    update = []
+
+    # Pull down our place data to save time
+    places = @client.get(@config[:macklin][:roster], {
+      :type => "place",
+      :$select => "id, name",
+      :$limit => 50000
+    }).inject({}) { |mem, place|
+      mem[place.name] = place.id
+      mem
+    }
+
+    Dir.mktmpdir("macklin") do |dir|
+      @client.get(@config[:macklin][:states], :$select => "name").each do |state|
+        state = state.name
+        state_scored = state.gsub(/\s+/, "_")
+        puts "Fetching data for #{state}..."
+
+        # Fetch our file
+        filename = "#{dir}/#{state_scored}.xls"
+        `wget -O #{filename} https://www.fbi.gov/about-us/cjis/ucr/crime-in-the-u.s/#{year}/crime-in-the-u.s.-#{year}/tables/table-8/table-8-by-state/Table_8_Offenses_Known_to_Law_Enforcement_by_#{state_scored}_by_City_#{year}.xls/output.xls`
+
+        # Parse our CSV
+        begin
+          sheet = Roo::Spreadsheet.open(filename).sheet(0)
+          columns = sheet.row(5)
+        rescue RuntimeError => e
+          $stderr.puts "Error reading #{filename}, probably it was empty..."
+          $stderr.puts e.inspect
+          next
+        end
+
+        # Loop through our cities
+        for num in 6...sheet.last_row
+          row = sheet.row(num)
+          next if row[0].nil? || row[0].match(/^\d/)
+
+          city = row.first.gsub(/\d+/, '')
+
+          place_id = places[places.keys.grep(/#{city}.*#{state}/i).first]
+
+          if place_id.nil?
+            $stderr.puts "No match found for: #{city}, #{state}'"
+            next
+          end
+
+          for col in 2..row.size
+            next if columns[col].nil?
+
+            crime_type = columns[col]
+              .gsub(/\s+/, ' ')
+              .gsub(/\d+/, '')
+
+            rec = {
+              key: "#{place_id}--#{year}--#{crime_type}",
+              id: place_id,
+              year: year,
+              name: "#{city}, #{state}",
+              crime_type: crime_type,
+              type: :place
+            }
+
+            if row[col] && row[1]
+              rec.merge!({
+                crime_count: row[col],
+                crime_rate: row[col].to_f / row[1].to_f,
+              })
+            end
+
+            update << rec
+          end
+        end
+
+      end
+    end
+
+    require 'pry'; binding.pry
+    puts "Writing results to #{@config[:macklin][:dest_uid]}"
+
+    update.each_slice(5000) do |slice|
+      loop do 
+        begin
+          puts @client.post(@config[:macklin][:dest_uid], slice)
+          break
+        rescue RuntimeError => e
+          $stderr.puts "Got #{e.inspect}, retrying..."
+        end
+      end
+    end
+
+    puts "\"Macklin, you son of a bitch...\" 😎"
+  end
 
   # Magic to get Spatialite working:
   option :config, :required => true, :type => :string
