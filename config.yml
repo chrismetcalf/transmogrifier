@@ -49,4 +49,4 @@ macklin:
   app_token: <%= ENV["ODN_APP_TOKEN"] %>
   roster: https://odn.data.socrata.com/resource/7g2b-8brv
   states: https://odn.data.socrata.com/resource/9qwh-uq8v
-  dest_uid: 525c-3tqu
+  dest_uid: 8x3g-rxtx

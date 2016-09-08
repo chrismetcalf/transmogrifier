@@ -240,91 +240,131 @@ class Box < Thor
       mem
     }
 
-    Dir.mktmpdir("macklin") do |dir|
-      @client.get(@config[:macklin][:states], :$select => "name,stusps").each do |res|
-        state = res.name
-        state_scored = state.gsub(/\s+/, "_")
-        state_scored_downcase = state_scored.downcase
-        state_abbr = res.stusps
-        state_abbr_downcase = state_abbr.downcase
-
-        @config[:macklin][:templates].each do |year, template|
-          filename = "#{dir}/#{year}-#{state_scored}.xls"
-          url = template
-                  .gsub(/{{\s*state_scored\s*}}/, state_scored)
-                  .gsub(/{{\s*state_scored_downcase\s*}}/, state_scored_downcase)
-                  .gsub(/{{\s*state_abbr\s*}}/, state_abbr)
-                  .gsub(/{{\s*state_abbr_downcase\s*}}/, state_abbr_downcase)
-
-          puts "Fetching data for #{state} in #{year}..."
-          `wget -O #{filename} #{url}`
-
-          # Parse our XLS
-          begin
-            sheet = Roo::Spreadsheet.open(filename).sheet(0)
-            columns = sheet.row(5)
-          rescue RuntimeError => e
-            $stderr.puts "Error reading #{filename}, probably it was empty..."
-            $stderr.puts e.inspect
-            next
-          end
-
-          # Loop through our cities
-          for num in 6...sheet.last_row
-            row = sheet.row(num)
-            next if row[0].nil? || row[0].match(/^\d/)
-
-            # Do a "fuzzy" lookup for the city in our places table
-            city = row.first.gsub(/\d+/, '')
-            place_id = places[places.keys.grep(/#{city}.*#{state}/i).first]
-
-            if place_id.nil?
-              $stderr.puts "No match found for: #{city}, #{state}'"
-              next
-            end
-
-            for col in 2..row.size
-              next if columns[col].nil?
-
-              crime_type = columns[col]
-              .gsub(/\s+/, ' ')
-              .gsub(/\d+/, '')
-
-              rec = {
-                key: "#{place_id}--#{year}--#{crime_type}",
-                id: place_id,
-                  year: year,
-                  name: "#{city}, #{state}",
-                crime_type: crime_type,
-                  type: :place
-              }
-
-              if row[col] && row[1]
-                rec.merge!({
-                  crime_count: row[col],
-                  crime_rate: row[col].to_f / row[1].to_f,
-                })
-              end
-
-              update << rec
-            end
-          end
-        end
-      end
-    end
-
     tmpfile = Tempfile.new(["macklin", ".csv"])
     puts "Writing output to #{tmpfile.path}..."
     CSV.open(tmpfile, "wb") do |csv|
-      keys = update.first.keys
+      # Write out our header
+      csv << [:key, :id, :name, :type, :variable, :value, :year, :crime_type]
 
-      # Write out a headers
-      csv << keys
+      Dir.mktmpdir("macklin") do |dir|
+        @client.get(@config[:macklin][:states], :$select => "name,stusps").each do |res|
+          state = res.name
+          state_scored = state.gsub(/\s+/, "_")
+          state_scored_downcase = state_scored.downcase
+          state_abbr = res.stusps
+          state_abbr_downcase = state_abbr.downcase
 
-      update.each do |rec|
-        # Dump to our CSV!
-        csv << keys.collect { |k| rec[k] }
-      end
+          @config[:macklin][:templates].each do |year, template|
+            filename = "#{dir}/#{year}-#{state_scored}.xls"
+            url = template
+                    .gsub(/{{\s*state_scored\s*}}/, state_scored)
+                    .gsub(/{{\s*state_scored_downcase\s*}}/, state_scored_downcase)
+                    .gsub(/{{\s*state_abbr\s*}}/, state_abbr)
+                    .gsub(/{{\s*state_abbr_downcase\s*}}/, state_abbr_downcase)
+
+            puts "Fetching data for #{state} in #{year}..."
+            `wget -O #{filename} #{url}`
+
+            # Parse our XLS
+            begin
+              sheet = Roo::Spreadsheet.open(filename).sheet(0)
+              columns = sheet.row(5)
+            rescue RuntimeError => e
+              $stderr.puts "Error reading #{filename}, probably it was empty..."
+              $stderr.puts e.inspect
+              next
+            end
+
+            # Loop through our cities
+            for num in 6...sheet.last_row
+              row = sheet.row(num)
+              next if row[0].nil? || row[0].match(/^\d/)
+
+              # Do a "fuzzy" lookup for the city in our places table
+              city = row.first.gsub(/\d+/, '')
+              place_id = places[places.keys.grep(/^#{city}.*#{state}$/i).first]
+
+              if place_id.nil?
+                $stderr.puts "No match found for: #{city}, #{state}'"
+                next
+              end
+
+              all_crimes = 0
+              population = nil
+              for col in 2..row.size
+                next if columns[col].nil?
+
+                crime_type = columns[col]
+                .gsub(/\s+/, ' ')
+                .gsub(/\d+/, '')
+                .gsub(/^.*Larceny.*$/, 'Larceny')
+
+                if row[col]
+                  # Count
+                  csv << [
+                    "#{place_id}--#{year}--#{crime_type}--count",  # key
+                    place_id,                                      # id
+                    "#{city}, #{state}",                           # name
+                    :place,                                        # place
+                    :count,                                        # variable
+                    row[col],                                      # value
+                    year,                                          # year
+                    crime_type                                     # crime_type
+                  ]
+
+                  # Aggregate our "All Crimes" metric
+                  all_crimes += row[col].to_i
+
+                  # Only if we have a population do we add the rate
+                  if row[1] && row[1].to_f > 0.0
+                    # Rate
+                    csv << [
+                      "#{place_id}--#{year}--#{crime_type}--rate",  # key
+                      place_id,                                     # id
+                      "#{city}, #{state}",                          # name
+                      :place,                                       # place
+                      :rate,                                        # variable
+                      row[col].to_f / row[1].to_f,                  # value
+                      year,                                         # year
+                      crime_type                                    # crime_type
+                    ]
+
+                    population = row[1].to_f
+                  else
+                    $stderr.puts "Skipping rate for for: #{city}, #{state}'"
+                  end
+                end
+              end # columns
+
+              # All Crimes Count
+              csv << [
+                "#{place_id}--#{year}--All Crimes--count",  # key
+                place_id,                                      # id
+                "#{city}, #{state}",                           # name
+                :place,                                        # place
+                :count,                                        # variable
+                all_crimes,                                    # value
+                year,                                          # year
+                "All Crimes"                                   # crime_type
+              ]
+
+              if population
+                # Rate
+                csv << [
+                  "#{place_id}--#{year}--All Crimes--rate",  # key
+                  place_id,                                     # id
+                  "#{city}, #{state}",                          # name
+                  :place,                                       # place
+                  :rate,                                        # variable
+                  all_crimes / population,                      # value
+                  year,                                         # year
+                  "All Crimes"                                  # crime_type
+                ]
+              end
+            end # cities
+          end # templates
+        end # states
+      end # tmpdir
 
       if @config[:macklin][:dest_uid]
         setup_config_json @config[:macklin]
@@ -334,7 +374,7 @@ class Box < Thor
         puts "Copying #{tmpfile.path} to #{Dir.pwd}..."
         FileUtils.cp tmpfile.path, Dir.pwd
       end
-    end
+    end # csv
 
     puts "\"Macklin, you son of a bitch...\" 😎"
   end
