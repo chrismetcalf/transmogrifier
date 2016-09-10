@@ -240,6 +240,9 @@ class Box < Thor
       mem
     }
 
+    # Generate our stop words regex
+    stop_words = Regexp.new("\s*(#{@config[:macklin][:stop_words].join("|")})\s*", Regexp::IGNORECASE)
+
     tmpfile = Tempfile.new(["macklin", ".csv"])
     puts "Writing output to #{tmpfile.path}..."
     CSV.open(tmpfile, "wb") do |csv|
@@ -263,15 +266,16 @@ class Box < Thor
                     .gsub(/{{\s*state_abbr_downcase\s*}}/, state_abbr_downcase)
 
             puts "Fetching data for #{state} in #{year}..."
-            `wget -O #{filename} #{url}`
+            `curl -L #{url} > #{filename}`
 
             # Parse our XLS
             begin
               sheet = Roo::Spreadsheet.open(filename).sheet(0)
               columns = sheet.row(5)
-            rescue RuntimeError => e
+            rescue Exception => e
               $stderr.puts "Error reading #{filename}, probably it was empty..."
               $stderr.puts e.inspect
+              require 'pry'; binding.pry
               next
             end
 
@@ -280,12 +284,15 @@ class Box < Thor
               row = sheet.row(num)
               next if row[0].nil? || row[0].match(/^\d/)
 
+              # Clean up our city name to improve matches
+              city = row.first.gsub(/\d+/, '').gsub(stop_words, '').strip
+
               # Do a "fuzzy" lookup for the city in our places table
-              city = row.first.gsub(/\d+/, '')
               place_id = places[places.keys.grep(/^#{city}.*#{state}$/i).first]
 
               if place_id.nil?
-                $stderr.puts "No match found for: #{city}, #{state}'"
+                $stderr.puts "No match found for: '#{city}, #{state}'"
+                # require 'pry'; binding.pry
                 next
               end
 
