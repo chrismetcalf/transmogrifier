@@ -32,28 +32,34 @@ supertrooper:
 
 macklin:
   stop_words:
-    - "city( of)?"
-    - borough
-    - township
-    - town
-    - "\\w+ county"
-    - ","
-  templates:
-    # 2014: https://www.fbi.gov/about-us/cjis/ucr/crime-in-the-u.s/2014/crime-in-the-u.s.-2014/tables/table-8/table-8-by-state/Table_8_Offenses_Known_to_Law_Enforcement_by_{{ state_scored }}_by_City_2014.xls/output.xls
-    2013: https://www.fbi.gov/about-us/cjis/ucr/crime-in-the-u.s/2013/crime-in-the-u.s.-2013/tables/table-8/table-8-state-cuts/table_8_offenses_known_to_law_enforcement_{{ state_scored_downcase }}_by_city_2013.xls/output.xls
-    # 2012: https://www.fbi.gov/about-us/cjis/ucr/crime-in-the-u.s/2012/crime-in-the-u.s.-2012/tables/8tabledatadecpdf/table-8-state-cuts/table_8_offenses_known_to_law_enforcement_by_{{ state_scored_downcase }}_by_city_2012.xls/output.xls
-    # 2011: https://www.fbi.gov/about-us/cjis/ucr/crime-in-the-u.s/2011/crime-in-the-u.s.-2011/tables/table8statecuts/table_8_offenses_known_to_law_enforcement_{{ state_scored_downcase }}_by_city_2011.xls/output.xls
-    # 2010: https://www.fbi.gov/about-us/cjis/ucr/crime-in-the-u.s/2010/crime-in-the-u.s.-2010/tables/table-8/10tbl08{{ state_abbr_downcase }}.xls/output.xls
-    # 2009: https://www2.fbi.gov/ucr/cius2009/data/documents/09tbl08{{ state_abbr_downcase }}.xls
-    # 2008: https://www2.fbi.gov/ucr/cius2008/data/documents/08tbl08{{ state_abbr_downcase }}.xls
-    # 2007: https://www2.fbi.gov/ucr/cius2007/data/documents/07tbl08{{ state_abbr_downcase }}.xls
-    # 2006: https://www2.fbi.gov/ucr/cius2006/data/documents/06tbl08{{ state_abbr_downcase }}.xls
+    - "^Village of"
+    - ",\\w+ County"
+    - "Township ,\\w+ County"
+    - "Town(ship)?$"
+    - "(Town and )?Village$"
+    - "Borough$"
+    - "City$"
+    - ",$"
+    # - "city( of)?"
+    # - borough
+    # - town
+    # - ","
+  files:
+    2014: https://ucr.fbi.gov/crime-in-the-u.s/2014/crime-in-the-u.s.-2014/tables/table-8/Table_8_Offenses_Known_to_Law_Enforcement_by_State_by_City_2014.xls
+    2013: https://ucr.fbi.gov/crime-in-the-u.s/2013/crime-in-the-u.s.-2013/tables/table-8/table_8_offenses_known_to_law_enforcement_by_state_by_city_2013.xls
+    2012: https://ucr.fbi.gov/crime-in-the-u.s/2012/crime-in-the-u.s.-2012/tables/8tabledatadecpdf/table_8_offenses_known_to_law_enforcement_by_state_by_city_2012.xls
+    2011: https://ucr.fbi.gov/crime-in-the-u.s/2011/crime-in-the-u.s.-2011/tables/table_8_offenses_known_to_law_enforcement_by_state_by_city_2011.xls
+    2010: https://ucr.fbi.gov/crime-in-the-u.s/2010/crime-in-the-u.s.-2010/tables/10tbl08.xls
+    2009: https://www2.fbi.gov/ucr/cius2009/data/documents/09tbl08.xls
+    2008: https://www2.fbi.gov/ucr/cius2008/data/documents/08tbl08.xls
+    2007: https://www2.fbi.gov/ucr/cius2007/data/documents/07tbl08.xls
+    2006: https://www2.fbi.gov/ucr/cius2006/data/documents/06tbl08.xls
     # In 2005 they changed the format of "Table 8" so we'll need to use a different technique
   timeout: 360
   domain: odn.data.socrata.com
   username:  <%= ENV["ODN_USERNAME"] %>
   password:  <%= ENV["ODN_PASSWORD"] %>
   app_token: <%= ENV["ODN_APP_TOKEN"] %>
-  roster: https://odn.data.socrata.com/resource/7g2b-8brv
+  roster: https://odn.data.socrata.com/resource/kksg-4m3m
   states: https://odn.data.socrata.com/resource/9qwh-uq8v
   # dest_uid: 8x3g-rxtx
