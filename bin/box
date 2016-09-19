@@ -321,7 +321,7 @@ class Box < Thor
 
             all_crimes = 0
             population = nil
-            for col in 2..row.size
+            for col in 3..row.size
               next if columns[col].nil?
 
               crime_type = columns[col]
@@ -348,6 +348,8 @@ class Box < Thor
 
                 # Only if we have a population do we add the rate
                 if row[2] && row[2].to_f > 0.0
+                  population = row[2].to_f
+
                   # Rate
                   csv << [
                     "#{place_id}--#{year}--#{crime_type}--rate",  # key
@@ -355,13 +357,12 @@ class Box < Thor
                     "#{city}, #{state}",                          # name
                     :place,                                       # place
                     :rate,                                        # variable
-                    row[col].to_f / row[1].to_f,                  # value
+                    row[col].to_f / population * 100000.0,       # value
                     year,                                         # year
                     crime_type,                                   # crime_type
                     place_name                                    # place_name
                   ]
 
-                  population = row[2].to_f
                 else
                   $stderr.puts "Skipping rate for for: #{city}, #{state}'"
                 end
@@ -389,7 +390,7 @@ class Box < Thor
                 "#{city}, #{state}",                          # name
                 :place,                                       # place
                 :rate,                                        # variable
-                all_crimes / population,                      # value
+                all_crimes / population * 100000.0,           # value
                 year,                                         # year
                 "All Crimes",                                 # crime_type
                 place_name                                    # place_name
