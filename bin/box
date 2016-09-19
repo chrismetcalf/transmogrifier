@@ -308,7 +308,7 @@ class Box < Thor
             places_audit.delete(place_id)
 
             if place_id.nil?
-              $stderr.puts "No match found for: '#{city}, #{state_code}'"
+              # $stderr.puts "No match found for: '#{city}, #{state_code}'"
               audit << [
                 city,
                 state,
@@ -364,7 +364,7 @@ class Box < Thor
                   ]
 
                 else
-                  $stderr.puts "Skipping rate for for: #{city}, #{state}'"
+                  # $stderr.puts "Skipping rate for for: #{city}, #{state}'"
                 end
               end
             end # columns
@@ -408,7 +408,6 @@ class Box < Thor
               name
             ]
           end
-          require 'pry'; binding.pry
         end # years
       end # tmpdir
 
