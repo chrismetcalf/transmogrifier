@@ -411,6 +411,13 @@ class Box < Thor
         end # years
       end # tmpdir
 
+      puts "Writing out audit log to ./audit.log..."
+      File.open('audit.log', 'w') { |f|
+        audit.each { |p|
+          f.write(p.join("\t") + "\n")
+        }
+      }
+
       if @config[:macklin][:dest_uid]
         setup_config_json @config[:macklin]
         puts "Updating dataset with DataSync..."
