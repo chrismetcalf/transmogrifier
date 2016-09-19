@@ -248,7 +248,7 @@ class Box < Thor
     })
 
     # Generate our stop words regex
-    stop_words = Regexp.new("\s*(#{@config[:macklin][:stop_words].join("|")})\s*", Regexp::IGNORECASE)
+    stop_words = Regexp.new("(#{@config[:macklin][:stop_words].join("|")})", Regexp::IGNORECASE)
 
     # Keep an audit roll
     audit = [[:ucr_city, :ucr_state, :ucr_year, :acs_place_id, :acs_place_name]]
@@ -292,7 +292,7 @@ class Box < Thor
             next if city.nil?
 
             # Clean up our city name to improve matches
-            city = city.gsub(/\d+/, '').gsub(stop_words, '').strip
+            city = city.gsub(/[^A-z ]/, '').gsub(stop_words, '').strip
 
             # State is column A
             if !row[0].nil?

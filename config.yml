@@ -32,18 +32,14 @@ supertrooper:
 
 macklin:
   stop_words:
-    - "^Village of"
-    - ",\\w+ County"
-    - "Township ,\\w+ County"
-    - "Town(ship)?$"
-    - "(Town and )?Village$"
-    - "Borough$"
-    - "City$"
+    - "^Village\\s+of\\s+"
+    - ",\\s+.*\\s+County"
+    - "\\s+Township,\\s+.*\\s+County"
+    - "\\s+Town(ship)?$"
+    - "(Town\\s+and\\s+)?Village$"
+    - "\\s+Borough$"
+    - "\\s+City$"
     - ",$"
-    # - "city( of)?"
-    # - borough
-    # - town
-    # - ","
   files:
     2014: https://ucr.fbi.gov/crime-in-the-u.s/2014/crime-in-the-u.s.-2014/tables/table-8/Table_8_Offenses_Known_to_Law_Enforcement_by_State_by_City_2014.xls
     2013: https://ucr.fbi.gov/crime-in-the-u.s/2013/crime-in-the-u.s.-2013/tables/table-8/table_8_offenses_known_to_law_enforcement_by_state_by_city_2013.xls
