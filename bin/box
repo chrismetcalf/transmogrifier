@@ -492,7 +492,7 @@ class Box < Thor
 
     agencies = @client.get(@config[:supertrooper][:agencies], :$where => @config[:supertrooper][:agency_filter], :$order => "agency_name", :$limit => 50000)
     bar = ProgressBar.create(
-      title: "Agencies", 
+      title: "Agencies",
       format: '%a |%b👮%i| %p%% %t',
       total: agencies.size)
 
