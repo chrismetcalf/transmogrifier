@@ -296,7 +296,7 @@ class Box < Thor
 
             # State is column A
             if !row[0].nil?
-              state = row[0].gsub(/\d+/, '').titlecase
+              state = row[0].gsub(/[^A-z ]/, '').strip.titlecase
               state_code = states.find { |s| s.name.downcase == state.downcase }.stusps
             end
 
