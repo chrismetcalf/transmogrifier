@@ -21,6 +21,8 @@ require 'ruby-progressbar'
 require 'roo'
 require 'roo-xls'
 require 'enumerator'
+require 'zip'
+require 'digest'
 
 class Time
   require 'tzinfo'
@@ -431,6 +433,102 @@ class Box < Thor
     puts "\"Macklin, you son of a bitch...\" 😎"
   end
 
+  option :config, :required => true, :type => :string
+  desc 'mcdreamy', 'Merge and translate SAHIE data'
+  def mcdreamy
+    puts '"The human life is made up of choices. Yes or no. In or out. Up or down. And then there are the choices that matter. Love or hate. To be a hero or to be a coward. To fight not to give in. To live or die. Live or die. That\'s the important choice. And it\'s not always in our hands." 🏥 💉'
+
+    mappings = @config[:mcdreamy][:mappings]
+
+    tmpfile = Tempfile.new(["mcdreamy", ".csv"])
+    puts "Writing output to #{tmpfile.path}..."
+    CSV.open(tmpfile, "wb") do |csv|
+      # Write out our header
+      csv << [:key, :id, :name, :type, :variable, :value, :year, :age, :race, :sex, :income]
+
+      Dir.mktmpdir("mcdreamy") do |dir|
+        @config[:mcdreamy][:files].each do |year, url|
+          zip_filename = "#{dir}/#{year}.zip"
+
+          puts "Fetching data for #{year} from #{url}..."
+          `curl -sL #{url} > #{zip_filename}`
+
+          # Unpack our zip and deal with it
+          Zip::File.open(zip_filename) do |zip_file|
+            zip_file.each do |file|
+              next unless file.name =~ /\.csv$/
+
+              filename = "#{dir}/#{file.name}"
+              file.extract(filename)
+
+              # Messy way of skipping but hey.
+              CSV.parse(
+                File.readlines(filename)
+                  .drop(@config[:mcdreamy][:skip_lines].to_i)
+                  .join,
+                :headers => :first_row) do |row|
+                # Now the magic happens
+
+                # Decode row
+                decode_row(row, mappings)
+
+                name = [
+                  row["county_name"].strip,
+                  row["state_name"].strip
+                ].reject { |s| s.empty? }.join(", ")
+
+                id = if row["geocat"] == "state"
+                       "0400000US#{row["statefips"]}"
+                     elsif row["geocat"] == "county"
+                       "0500000US0#{row["countyfips"]}"
+                     end
+
+                @config[:mcdreamy][:var_columns].each do |var|
+                  key = Digest::SHA256.hexdigest([
+                    id,
+                    var.downcase,
+                    row["year"],
+                    row["agecat"],
+                    row["racecat"],
+                    row["sexcat"],
+                    row["iprcat"]
+                  ].join("--"))
+
+                  value = begin Float(row[var_key.to_s].strip) rescue nil end
+
+                  csv << [
+                    key,                                        # key
+                    id,                                         # id
+                    name,                                       # name
+                    row["geocat"],                              # type
+                    var.downcase,                               # variable
+                    value,                                      # value
+                    row["year"],                                # year
+                    row["agecat"],                              # age
+                    row["racecat"],                             # race
+                    row["sexcat"],                              # sex
+                    row["iprcat"]                               # income
+                  ]
+                end
+              end
+            end
+          end
+        end
+      end
+
+      if @config[:mcdreamy][:dest_uid]
+        setup_config_json @config[:mcdreamy]
+        puts "Updating dataset with DataSync..."
+        Kernel.exec("java -jar ./DataSync-1.6.2.jar -sc control.json -ph true -c config.json -f #{tmpfile.path} -i #{@config[:mcdreamy][:dest_uid]} -t IntegrationJob -m replace -h true")
+      else
+        puts "Copying #{tmpfile.path} to #{Dir.pwd}..."
+        FileUtils.cp tmpfile.path, Dir.pwd
+      end
+    end # csv
+
+    puts "\"It's a beautiful day to save lives!\" 😎"
+  end
+
   # Magic to get Spatialite working:
   option :config, :required => true, :type => :string
   desc 'supertrooper', 'Merge and aggregate crime datasets from moto.data.socrata.com'
@@ -676,6 +774,22 @@ class Box < Thor
           :appToken => config[:app_token]
         }.to_json())
       }
+    end
+
+    def decode_row(row, mappings)
+      row.headers.each do |header|
+        next if header.nil?
+
+        header_sym = header.to_sym
+
+        row[header] = if mappings[header_sym] && mappings[header_sym][row[header]]
+                        mappings[header_sym][row[header]]
+                      elsif mappings[header_sym] && mappings[header_sym][row[header].to_i]
+                        mappings[header_sym][row[header].to_i]
+                      else
+                        row[header]
+                      end
+      end
     end
   end
 end
