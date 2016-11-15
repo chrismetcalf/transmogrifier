@@ -480,7 +480,7 @@ class Box < Thor
                 id = if row["geocat"] == "state"
                        "0400000US#{row["statefips"]}"
                      elsif row["geocat"] == "county"
-                       "0500000US0#{row["countyfips"]}"
+                       "0500000US#{row["statefips"]}#{row["countyfips"]}"
                      end
 
                 @config[:mcdreamy][:var_columns].each do |var|
@@ -494,7 +494,7 @@ class Box < Thor
                     row["iprcat"]
                   ].join("--"))
 
-                  value = begin Float(row[var_key.to_s].strip) rescue nil end
+                  value = begin Float(row[var.to_s].strip) rescue nil end
 
                   csv << [
                     key,                                        # key
