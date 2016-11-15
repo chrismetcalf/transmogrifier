@@ -1,4 +1,5 @@
 batch_size: 10000
+datasync_jar: "DataSync-1.7.2.jar"
 odn:
   username:  <%= ENV["ODN_USERNAME"] %>
   password:  <%= ENV["ODN_PASSWORD"] %>

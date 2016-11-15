@@ -222,7 +222,7 @@ class Box < Thor
       end
 
       puts "Updating dataset with DataSync..."
-      Kernel.exec("java -jar ./DataSync-1.6.2.jar -sc control.json -ph true -c config.json -f #{tmpfile.path} -i #{uid} -t IntegrationJob -m replace -h true")
+      Kernel.exec("java -jar ./#{@config[:datasync_jar]} -sc control.json -ph true -c config.json -f #{tmpfile.path} -i #{uid} -t IntegrationJob -m replace -h true")
     end
   end
 
@@ -423,7 +423,7 @@ class Box < Thor
       if @config[:macklin][:dest_uid]
         setup_config_json @config[:macklin]
         puts "Updating dataset with DataSync..."
-        Kernel.exec("java -jar ./DataSync-1.6.2.jar -sc control.json -ph true -c config.json -f #{tmpfile.path} -i #{@config[:macklin][:dest_uid]} -t IntegrationJob -m replace -h true")
+        Kernel.exec("java -jar ./#{@config[:datasync_jar]} -sc control.json -ph true -c config.json -f #{tmpfile.path} -i #{@config[:macklin][:dest_uid]} -t IntegrationJob -m replace -h true")
       else
         puts "Copying #{tmpfile.path} to #{Dir.pwd}..."
         FileUtils.cp tmpfile.path, Dir.pwd
@@ -519,7 +519,7 @@ class Box < Thor
       if @config[:mcdreamy][:dest_uid]
         setup_config_json @config[:mcdreamy]
         puts "Updating dataset with DataSync..."
-        Kernel.exec("java -jar ./DataSync-1.6.2.jar -sc control.json -ph true -c config.json -f #{tmpfile.path} -i #{@config[:mcdreamy][:dest_uid]} -t IntegrationJob -m replace -h true")
+        Kernel.exec("java -jar ./#{@config[:datasync_jar]} -sc control.json -ph true -c config.json -f #{tmpfile.path} -i #{@config[:mcdreamy][:dest_uid]} -t IntegrationJob -m replace -h true")
       else
         puts "Copying #{tmpfile.path} to #{Dir.pwd}..."
         FileUtils.cp tmpfile.path, Dir.pwd
@@ -678,7 +678,7 @@ class Box < Thor
 
       if(@config[:supertrooper][:ym_dest_uid])
         puts "Updating dataset with DataSync..."
-        Kernel.exec("java -jar ./DataSync-1.6.2.jar -sc control.json -ph true -c config.json -f #{ym_tmpfile.path} -i #{@config[:supertrooper][:ym_dest_uid]} -t IntegrationJob -m replace -h true")
+        Kernel.exec("java -jar ./#{@config[:datasync_jar]} -sc control.json -ph true -c config.json -f #{ym_tmpfile.path} -i #{@config[:supertrooper][:ym_dest_uid]} -t IntegrationJob -m replace -h true")
       else
         puts "Copying #{ym_tmpfile.path} to #{Dir.pwd}..."
         FileUtils.cp ym_tmpfile.path, Dir.pwd
@@ -722,7 +722,7 @@ class Box < Thor
 
       if @config[:supertrooper][:y_dest_uid]
         puts "Updating dataset with DataSync..."
-        Kernel.exec("java -jar ./DataSync-1.6.2.jar -sc control.json -ph true -c config.json -f #{y_tmpfile.path} -i #{@config[:supertrooper][:y_dest_uid]} -t IntegrationJob -m replace -h true")
+        Kernel.exec("java -jar ./#{@config[:datasync_jar]} -sc control.json -ph true -c config.json -f #{y_tmpfile.path} -i #{@config[:supertrooper][:y_dest_uid]} -t IntegrationJob -m replace -h true")
       else
         puts "Copying #{y_tmpfile.path} to #{Dir.pwd}..."
         FileUtils.cp y_tmpfile.path, Dir.pwd
