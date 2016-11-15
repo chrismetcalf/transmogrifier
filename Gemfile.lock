@@ -67,6 +67,7 @@ DEPENDENCIES
   roo
   roo-xls
   ruby-progressbar
+  rubyzip
   soda-ruby (~> 0.2.19)
   sqlite3!
   thor
