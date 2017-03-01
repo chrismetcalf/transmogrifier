@@ -112,3 +112,31 @@ mcdreamy:
       3: At or below 138% of poverty
       4: At or below 400% of poverty
       5: Between 138% and 400% of poverty
+
+import_export:
+  states: https://odn.data.socrata.com/resource/9qwh-uq8v
+  roster: https://odn.data.socrata.com/resource/kksg-4m3m
+  templates:
+    2016: https://www.census.gov/foreign-trade/Press-Release/2016pr/{{ month }}/exh2s.txt
+    2015: https://www.census.gov/foreign-trade/Press-Release/2015pr/{{ month }}/exh2s.txt
+    2014: https://www.census.gov/foreign-trade/Press-Release/2014pr/{{ month }}/exh2s.txt
+    2013: https://www.census.gov/foreign-trade/Press-Release/2013pr/{{ month }}/exh2s.txt
+    2012: https://www.census.gov/foreign-trade/Press-Release/2012pr/{{ month }}/exh2s.txt
+    2011: https://www.census.gov/foreign-trade/Press-Release/2011pr/{{ month }}/exh2s.txt
+    2010: https://www.census.gov/foreign-trade/Press-Release/2010pr/{{ month }}/exh2s.txt
+    2009: https://www.census.gov/foreign-trade/Press-Release/2009pr/{{ month }}/exh2s.txt
+    2008: https://www.census.gov/foreign-trade/Press-Release/2008pr/{{ month }}/exh2s.txt
+    2007: https://www.census.gov/foreign-trade/Press-Release/2007pr/{{ month }}/exh2s.txt
+    2006: https://www.census.gov/foreign-trade/Press-Release/2006pr/{{ month }}/exh2s.txt
+    2005: https://www.census.gov/foreign-trade/Press-Release/2005pr/{{ month }}/exh2s.txt
+    2004: https://www.census.gov/foreign-trade/Press-Release/2004pr/{{ month }}/exh2s.txt
+    2003: https://www.census.gov/foreign-trade/Press-Release/2003pr/{{ month }}/exh2s.txt
+    2002: https://www.census.gov/foreign-trade/Press-Release/2002pr/{{ month }}/exh2as.txt
+    2001: https://www.census.gov/foreign-trade/Press-Release/2001pr/{{ month }}/exh2as.txt
+    2000: https://www.census.gov/foreign-trade/Press-Release/2000pr/{{ month }}/exh2as.txt
+    # 1999: https://www.census.gov/foreign-trade/Press-Release/99_press_releases/{{ month_word }}/exh2as.txt
+    # 1998: https://www.census.gov/foreign-trade/Press-Release/98_press_releases/{{ month_word }}/exh2as.txt
+    # 1997: https://www.census.gov/foreign-trade/Press-Release/97_press_releases/{{ month_word }}/exh2as.txt
+    # 1996: https://www.census.gov/foreign-trade/Press-Release/96_press_releases/{{ month_word }}/exh2as.txt
+    # 1995: https://www.census.gov/foreign-trade/Press-Release/95_press_releases/{{ month_word }}/exh2as.txt
+

@@ -529,6 +529,101 @@ class Box < Thor
     puts "\"It's a beautiful day to save lives!\" 😎"
   end
 
+  option :config, :required => true, :type => :string
+  desc 'import_export', 'Munge census foreign trade data'
+  def import_export
+    # Pull down our state data to save time
+    states = @client.get(@config[:import_export][:roster], {
+      :$select => "id, name",
+      :$where => "type IN ('region.state')",
+      :$limit => 100000,
+    }).inject({}) { |mem, place|
+      mem[place.name] = place.id
+      mem
+    }
+
+    tmpfile = Tempfile.new(["import-export", ".csv"])
+    puts "Writing output to #{tmpfile.path}..."
+    CSV.open(tmpfile, "wb") do |csv|
+      # Write out our header
+      csv << [:key, :id, :name, :type, :variable, :value, :year, :month, :year_month]
+
+      # Here we'll keep some totals
+      totals = Hash.new { |h, k| h[k] = 0 }
+
+      Dir.mktmpdir("import-export") do |dir|
+        @config[:import_export][:templates].each do |year, url|
+          (1..12).each do |month|
+            month_name = sprintf('%02d', month) + ": " + Date::MONTHNAMES[month]
+            txt_filename = "#{dir}/#{year}-#{sprintf '%02d', month}.txt"
+            month_url = url.gsub(/{{\s*month\s*}}/, sprintf('%02d', month))
+            puts "Fetching data for #{txt_filename} from #{month_url}..."
+            `curl -sL #{month_url} > #{txt_filename}`
+
+            variable = nil
+            File.open(txt_filename).each do |line|
+              # Check what variable we should be in
+              if line.match(/\s+Manufactured Commodities/)
+                variable = :manufactured
+              elsif line.match(/\s+Non-Manufactured Commodities/)
+                variable = :non_manufactured
+              end
+
+              # See if we can parse out a metric
+              if match = line.match(/\s+([A-z ]+)\s+([0-9.,]+)\s+([0-9,.]+)/)
+                state = match[1].strip
+                val = match[2].to_i * 1000000
+                id = states[state]
+                if id && variable
+                  csv << [
+                    "#{id}-#{year}-#{month}-#{variable}", # key
+                    id,                                   # id
+                    state,                                # name
+                    :state,                               # type
+                    variable,                             # variable
+                    val,                                  # value
+                    year,                                 # year
+                    month_name,                           # month
+                    "#{year}-#{sprintf("%02d", month)}"   # year_month
+                  ]
+
+                  # Stash away some totals
+                  totals[[id, year, month, month_name, "all_goods", state]] += val
+                  totals[[id, year, nil,  "Total",     variable,    state]] += val
+                  totals[[id, year, nil,  "Total",     "all_goods", state]] += val
+                end
+              end
+            end
+          end
+        end
+
+        # Output our totals at the end
+        totals.each do |key, value|
+          csv << [
+            key[0..3].join("-"),                  # key
+            key[0],                               # id
+            key[5],                               # name
+            :state,                               # type
+            key[4],                               # variable
+            value,                                # value
+            key[1],                               # year
+            key[3],                               # month
+            key[1..2].compact.join("-")           # year_month
+          ]
+        end
+      end
+
+      if @config[:import_export][:dest_uid]
+        setup_config_json @config[:import_export]
+        puts "Updating dataset with DataSync..."
+        Kernel.exec("java -jar ./#{@config[:datasync_jar]} -sc control.json -ph true -c config.json -f #{tmpfile.path} -i #{@config[:import_export][:dest_uid]} -t IntegrationJob -m replace -h true")
+      else
+        puts "Copying #{tmpfile.path} to #{Dir.pwd}..."
+        FileUtils.cp tmpfile.path, Dir.pwd
+      end
+    end # csv
+  end
+
   # Magic to get Spatialite working:
   option :config, :required => true, :type => :string
   desc 'supertrooper', 'Merge and aggregate crime datasets from moto.data.socrata.com'
